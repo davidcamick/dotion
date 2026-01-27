@@ -82,7 +82,7 @@ export default function Home() {
                   return newMessages
                 })
               }
-            } catch (e) {
+            } catch {
               // Skip invalid JSON
             }
           }
