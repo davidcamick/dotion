@@ -5,8 +5,12 @@ import { cookies } from 'next/headers'
 
 const requiredEnv = ['GOOGLE_CALENDAR_ID']
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
+    const { searchParams } = new URL(req.url)
+    const dateParam = searchParams.get('date')
+    const viewModeParam = searchParams.get('range')
+
     const cookieStore = cookies()
     const accessToken = cookieStore.get('google_access_token')?.value
     const expiresAt = cookieStore.get('google_access_token_expires_at')?.value
@@ -27,12 +31,17 @@ export async function GET() {
     }
 
     const timeZone = process.env.GOOGLE_TIMEZONE || 'UTC'
-    const now = DateTime.now().setZone(timeZone)
-
-    // Get the start of the week (Sunday) and fetch a full week
-    const startOfWeek = now.startOf('week')
-    const timeMin = startOfWeek.toISO()
-    const timeMax = startOfWeek.plus({ days: 7 }).toISO()
+    
+    // Default to provided date or "now"
+    const baseDate = dateParam ? DateTime.fromISO(dateParam, { zone: timeZone }) : DateTime.now().setZone(timeZone)
+    
+    // Fetch a generous range to allow "snappy" local navigation
+    // e.g. 2 weeks before and 4 weeks after
+    const startRange = baseDate.minus({ weeks: 2 }).startOf('week')
+    const endRange = baseDate.plus({ weeks: 4 }).endOf('week')
+    
+    const timeMin = startRange.toISO()
+    const timeMax = endRange.toISO()
 
     const oauth2Client = new google.auth.OAuth2()
 
@@ -53,22 +62,21 @@ export async function GET() {
 
     const events = res.data.items || []
 
-    // Build array of 7 days from start of week
-    const days = Array.from({ length: 7 }, (_, i) => {
-      const dayDate = startOfWeek.plus({ days: i })
-      const dayLabel = dayDate.toFormat('EEE d') // e.g., "Mon 27"
+    const diffInDays = endRange.diff(startRange, 'days').days
+    // Build array for the whole range
+    const days = Array.from({ length: Math.ceil(diffInDays) }, (_, i) => {
+      const dayDate = startRange.plus({ days: i })
+      const dayLabel = dayDate.toFormat('EEE d')
       const dateKey = dayDate.toISODate()
       
       const dayEvents = events
         .map((event) => {
           const startRaw = event.start?.dateTime || event.start?.date
-          const endRaw = event.end?.dateTime || event.end?.date
           if (!startRaw) return null
-
-          const start = DateTime.fromISO(startRaw, { zone: timeZone })
-          const end = endRaw
-            ? DateTime.fromISO(endRaw, { zone: timeZone })
-            : null
+          
+          let start = DateTime.fromISO(startRaw, { zone: timeZone })
+          let endRaw = event.end?.dateTime || event.end?.date
+          let end = endRaw ? DateTime.fromISO(endRaw, { zone: timeZone }) : null
 
           return {
             id: event.id || '',
@@ -92,7 +100,8 @@ export async function GET() {
       return {
         label: dayLabel,
         date: dateKey,
-        isToday: dateKey === now.toISODate(),
+        isToday: dateKey === DateTime.now().setZone(timeZone).toISODate(),
+        originalDate: dayDate.toISO(), // Add strict ISO for comparison
         events: dayEvents,
       }
     })

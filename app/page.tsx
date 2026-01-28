@@ -50,7 +50,11 @@ export default function Home() {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+
   const [calendarDays, setCalendarDays] = useState<CalendarDay[]>([])
+  const [focusedDate, setFocusedDate] = useState(new Date()) // Target date for view
+  const [isFetchingMore, setIsFetchingMore] = useState(false)
+
   const [calendarError, setCalendarError] = useState<string | null>(null)
   const [isCalendarLoading, setIsCalendarLoading] = useState(true)
   const [calendarTimeZone, setCalendarTimeZone] = useState('UTC')
@@ -58,6 +62,8 @@ export default function Home() {
   const [viewMode, setViewMode] = useState<1 | 2 | 3 | 7>(3)
   const [zoomLevel, setZoomLevel] = useState(1)
   const [hoveredSlot, setHoveredSlot] = useState<{ start: string, end: string, label?: string } | null>(null)
+  const [recentlyModifiedEventId, setRecentlyModifiedEventId] = useState<string | undefined>(undefined)
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const [promptIndex, setPromptIndex] = useState(0)
@@ -88,35 +94,66 @@ export default function Home() {
     scrollToBottom()
   }, [messages])
 
-  useEffect(() => {
-    const loadCalendar = async () => {
-      setIsCalendarLoading(true)
-      try {
-        const response = await fetch('/api/calendar')
-        if (response.status === 401) {
-          setIsAuthed(false)
-          setCalendarDays([])
-          setCalendarError(null)
-          return
-        }
-        if (!response.ok) {
-          throw new Error('Failed to load calendar')
-        }
-        const data = await response.json()
-        setIsAuthed(true)
-        setCalendarDays(data.days || [])
-        setCalendarTimeZone(data.timeZone || 'UTC')
-        setCalendarError(null)
-      } catch (error) {
-        console.error('Calendar error:', error)
-        setCalendarError('Unable to load calendar events.')
-      } finally {
-        setIsCalendarLoading(false)
+  const fetchCalendarData = async (targetDate?: Date) => {
+    const dateStr = (targetDate || focusedDate).toISOString().split('T')[0]
+    
+    try {
+      const response = await fetch(`/api/calendar?date=${dateStr}`)
+      if (response.status === 401) {
+        setIsAuthed(false)
+        setCalendarDays([])
+        return
       }
+      if (!response.ok) throw new Error('Failed to load calendar')
+      
+      const data = await response.json()
+      setIsAuthed(true)
+      setCalendarDays(data.days || [])
+      setCalendarTimeZone(data.timeZone || 'UTC')
+      setCalendarError(null)
+    } catch (error) {
+      console.error('Calendar load error:', error)
+      setCalendarError('Unable to load calendar events.')
     }
+  }
 
-    loadCalendar()
+  useEffect(() => {
+    const init = async () => {
+      setIsCalendarLoading(true)
+      await fetchCalendarData()
+      setIsCalendarLoading(false)
+    }
+    init()
   }, [])
+
+  const handleNavigate = (direction: 'prev' | 'next') => {
+    const daysToAdd = viewMode === 7 ? 7 : (viewMode === 1 ? 1 : viewMode)
+    const delta = direction === 'next' ? daysToAdd : -daysToAdd
+    
+    const newDate = new Date(focusedDate)
+    newDate.setDate(newDate.getDate() + delta)
+    setFocusedDate(newDate)
+    
+    // Check if we need to fetch more data
+    const year = newDate.getFullYear()
+    const month = String(newDate.getMonth() + 1).padStart(2, '0')
+    const day = String(newDate.getDate()).padStart(2, '0')
+    const dateStr = `${year}-${month}-${day}`
+
+    // Check if date is within our current data range (with some buffer)
+    const isInRange = calendarDays.some(d => d.date === dateStr)
+    
+    if (!isInRange) {
+        setIsFetchingMore(true)
+        fetchCalendarData(newDate).finally(() => setIsFetchingMore(false))
+    }
+  }
+
+  const handleToday = () => {
+    const now = new Date()
+    setFocusedDate(now)
+    fetchCalendarData(now)
+  }
 
   const handleSignIn = () => {
     window.location.href = '/api/google/auth'
@@ -135,49 +172,80 @@ export default function Home() {
   }
 
   const refreshCalendar = async () => {
-    try {
-      const response = await fetch('/api/calendar')
-      if (response.status === 401) {
-        setIsAuthed(false)
-        setCalendarDays([])
-        return
-      }
-      if (!response.ok) {
-        throw new Error('Failed to load calendar')
-      }
-      const data = await response.json()
-      setIsAuthed(true)
-      setCalendarDays(data.days || [])
-      setCalendarTimeZone(data.timeZone || 'UTC')
-      setCalendarError(null)
-    } catch (error) {
-      console.error('Calendar refresh error:', error)
-    }
+     await fetchCalendarData()
   }
 
   const getVisibleDays = () => {
-    if (viewMode === 7) return calendarDays
-    
-    // Find today's index
-    const todayIndex = calendarDays.findIndex(day => day.isToday)
-    if (todayIndex === -1) return calendarDays.slice(0, viewMode)
-    
-    // Center around today
-    const before = Math.floor((viewMode - 1) / 2)
-    const after = Math.ceil((viewMode - 1) / 2)
-    
-    let start = todayIndex - before
-    let end = todayIndex + after + 1
-    
-    // Adjust if we're at the edges
-    if (start < 0) {
-      end += Math.abs(start)
-      start = 0
+    // If we have no data, return empty
+    if (calendarDays.length === 0) return []
+
+    // If hovering a slot outside current view, temporarily snap to it?
+    let targetDate = focusedDate
+    if (hoveredSlot) {
+        const slotDate = new Date(hoveredSlot.start)
+        // Check if slotDate is outside current visible range
+        // For simplicity, just override targetDate if valid
+        if (!isNaN(slotDate.getTime())) {
+            targetDate = slotDate
+        }
     }
+
+    // Construct local YYYY-MM-DD to match calendarDays format
+    const year = targetDate.getFullYear()
+    const month = String(targetDate.getMonth() + 1).padStart(2, '0')
+    const day = String(targetDate.getDate()).padStart(2, '0')
+    const targetDateStr = `${year}-${month}-${day}`
+    
+    // Find index of target date
+    const targetIndex = calendarDays.findIndex(day => day.date === targetDateStr)
+    
+    // If not found (e.g. data fetching lag), try to find closest
+    let centerIndex = targetIndex
+    if (targetIndex === -1) {
+       // Just pick middle of array or fallback to today
+       // Or filtering by searching closest date?
+       // Let's assume data is sorted.
+       // Find closest date
+       let minDiff = Infinity
+       calendarDays.forEach((day, idx) => {
+           const d = new Date(day.date)
+           const diff = Math.abs(d.getTime() - targetDate.getTime())
+           if (diff < minDiff) {
+               minDiff = diff
+               centerIndex = idx
+           }
+       })
+    }
+
+    if (viewMode === 7) {
+        // For week view, align to start of week (Sunday) based on targetDate
+        const d = new Date(targetDate)
+        const dayOfWeek = d.getDay() // 0 = Sunday
+        // We want to start 'dayOfWeek' days before the targetDate to align?
+        // Actually, if we are in week view, we usually want to see the whole week containing the date.
+        // Let's just create a window. Since our API returns "start of week", maybe we align to that?
+        // But the user might be navigating freely. 
+        // Let's just try to center or start the week properly.
+        
+        // Find the Sunday before or on the target date
+        // Since we don't have infinite data, we just find the closest previous Sunday in our list
+        // Or simpler: just show 7 days starting from targetDate's start-of-week
+        const startOffset = d.getDay()
+        let startIndex = centerIndex - startOffset
+        if (startIndex < 0) startIndex = 0
+        return calendarDays.slice(startIndex, startIndex + 7)
+    }
+    
+    // For 1, 2, 3 days
+    // Show 'viewMode' days starting from targetDate? Or centered?
+    // "Single day view" -> show targetDate.
+    // "3 day view" -> maybe today + next 2 days?
+    let start = centerIndex
+    let end = centerIndex + viewMode
+    
     if (end > calendarDays.length) {
-      start -= (end - calendarDays.length)
-      end = calendarDays.length
-      start = Math.max(0, start)
+       start = Math.max(0, calendarDays.length - viewMode)
+       end = calendarDays.length
     }
     
     return calendarDays.slice(start, end)
@@ -216,6 +284,10 @@ export default function Home() {
     // If you want auto-submit, you'd move the handleSubmit logic to a reusable function and call it here with the message.
   }
 
+  const handleSelectEvent = (eventId: string) => {
+    setSelectedEventId(prev => prev === eventId ? null : eventId)
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!input.trim() || isLoading) return
@@ -227,10 +299,24 @@ export default function Home() {
       return
     }
 
-    const userMessage: Message = { role: 'user', content: input }
+    let messageContent = input
+    
+    // Add context if event is selected
+    if (selectedEventId) {
+      const allEvents = calendarDays.flatMap(d => d.events)
+      const selectedEvent = allEvents.find(e => e.id === selectedEventId)
+      if (selectedEvent) {
+          messageContent = `[Context: User selected event ID: ${selectedEvent.id}, Summary: "${selectedEvent.summary}"]\n${input}`
+      }
+    }
+
+    const userMessage: Message = { role: 'user', content: messageContent }
     setMessages(prev => [...prev, userMessage])
     setInput('')
     setIsLoading(true)
+    // Clear selection after sending? Maybe keep it for follow-up? 
+    // Usually modifying it once clears the ambiguity, but keeping it allows "move it again".
+    // Let's keep it selected until user unselects or selects another.
 
     try {
       const response = await fetch('/api/chat', {
@@ -270,6 +356,9 @@ export default function Home() {
           if (!trimmed || !trimmed.startsWith('data:')) continue
 
           const data = trimmed.replace(/^data:\s*/, '')
+          // Log the full AI response chunk
+          console.log('%c AI Stream Data:', 'color: #00f0ff; font-weight: bold;', data)
+
           if (data === '[DONE]') {
             return
           }
@@ -277,34 +366,62 @@ export default function Home() {
           try {
             const parsed = JSON.parse(data)
             
+            // Log parsed object for inspection
+            console.log('Parsed chunk:', parsed)
+
             // Check if calendar needs refresh
             if (parsed.refresh_calendar) {
+              console.log('Triggering calendar refresh')
               refreshCalendar()
               continue
             }
 
             // Check for tool result data
             if (parsed.tool_result_data) {
+                console.log('Received tool data:', parsed.tool_result_data)
                 setMessages(prev => {
                     const updated = [...prev]
                     const lastIndex = updated.length - 1
                     if (updated[lastIndex].role === 'assistant') {
                         // Normalize tool data for events vs slots
                         let normalizedToolData = parsed.tool_result_data;
-                        if (parsed.tool_result_data.type && parsed.tool_result_data.eventId) {
+                        if (parsed.tool_result_data.type && (parsed.tool_result_data.eventId || parsed.tool_result_data.type === 'create')) { 
+                            // Ensure 'create' type is caught even if eventId is missing (though it shouldn't be)
+                            // The backend sends 'create', 'update', 'delete' as type.
                             normalizedToolData = {
-                                type: 'event',
+                                ...parsed.tool_result_data,
                                 eventType: parsed.tool_result_data.type,
-                                ...parsed.tool_result_data
+                                type: 'event'
+                            }
+                            
+                            // Set modified event ID for shimmer effect
+                            if (parsed.tool_result_data.eventId) {
+                                console.log('Setting modified event ID:', parsed.tool_result_data.eventId);
+                                setRecentlyModifiedEventId(parsed.tool_result_data.eventId);
+                                // Clear after 15 seconds
+                                setTimeout(() => setRecentlyModifiedEventId(undefined), 15000);
                             }
                         } else if (parsed.tool_result_data.type === 'slots') {
                              // already in correct format
                         }
+                        
+                        console.log('Setting tool data on message:', normalizedToolData)
 
                         updated[lastIndex] = {
                             ...updated[lastIndex],
                             toolData: normalizedToolData
                         }
+                    } else {
+                        console.warn('Last message was not assistant, appending new message for tool data')
+                        updated.push({
+                            role: 'assistant',
+                            content: '',
+                            toolData: parsed.tool_result_data.type === 'slots' ? parsed.tool_result_data : {
+                                ...parsed.tool_result_data,
+                                eventType: parsed.tool_result_data.type,
+                                type: 'event'
+                            }
+                        })
                     }
                     return updated
                 })
@@ -525,7 +642,30 @@ export default function Home() {
           </div>
 
           {/* Input */}
-          <div className="p-6 border-t border-white/10 bg-white/5">
+          <div className="p-6 border-t border-white/10 bg-white/5 relative">
+            <AnimatePresence>
+            {selectedEventId && (
+              <motion.div 
+               initial={{ opacity: 0, y: 10 }}
+               animate={{ opacity: 1, y: 0 }}
+               exit={{ opacity: 0, y: 10 }}
+               className="absolute -top-12 left-6 right-6 bg-space-accent/10 border border-space-accent/20 backdrop-blur-md px-4 py-2 rounded-lg flex items-center justify-between text-sm text-space-accent shadow-lg"
+              >
+                  <div className="flex items-center gap-2 truncate">
+                      <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                      <span className="truncate">
+                          Selected: <span className="font-bold">{calendarDays.flatMap(d => d.events).find(e => e.id === selectedEventId)?.summary || 'Event'}</span>
+                      </span>
+                  </div>
+                  <button 
+                    onClick={() => setSelectedEventId(null)}
+                    className="p-1 hover:bg-space-accent/20 rounded-full transition-colors"
+                  >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                  </button>
+              </motion.div>
+            )}
+            </AnimatePresence>
             <form onSubmit={handleSubmit} className="flex gap-4">
               <input
                 type="text"
@@ -555,9 +695,33 @@ export default function Home() {
         >
           <div className="p-4 border-b border-white/10 bg-white/5">
             <div className="flex items-center justify-between mb-3">
-              <div>
-                <h2 className="text-xl font-light text-white">Schedule</h2>
-                <p className="text-sm text-gray-400">Time dilation logs</p>
+              <div className="flex items-center gap-2">
+                 <button 
+                  onClick={() => handleNavigate('prev')}
+                  disabled={isFetchingMore}
+                  className="p-1 hover:bg-white/10 rounded-full transition-colors disabled:opacity-50 text-gray-400 hover:text-white"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                  </svg>
+                </button>
+                <div className="text-center">
+                    <h2 className="text-xl font-light text-white">
+                        {focusedDate.toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}
+                    </h2>
+                     <p className="text-xs text-gray-400 uppercase tracking-widest">
+                        {focusedDate.toLocaleDateString('en-US', { weekday: 'long' })}
+                     </p>
+                </div>
+                 <button 
+                  onClick={() => handleNavigate('next')}
+                  disabled={isFetchingMore}
+                  className="p-1 hover:bg-white/10 rounded-full transition-colors disabled:opacity-50 text-gray-400 hover:text-white"
+                >
+                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                </button>
               </div>
               <button
                 onClick={handleSignOut}
@@ -618,6 +782,8 @@ export default function Home() {
             {isCalendarLoading && (
                <div className="absolute inset-0 flex items-center justify-center bg-space-black/50 backdrop-blur-sm z-50">
                   <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-space-accent"></div>
+                  onSelectEvent={handleSelectEvent}
+                  selectedEventId={selectedEventId}
                </div>
             )}
 
@@ -635,6 +801,7 @@ export default function Home() {
                   timeZone={calendarTimeZone} 
                   zoomLevel={zoomLevel} 
                   hoveredSlot={hoveredSlot}
+                  recentlyModifiedEventId={recentlyModifiedEventId}
               />
             )}
           </div>

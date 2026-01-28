@@ -11,6 +11,21 @@ const tools = [
   {
     type: 'function',
     function: {
+        name: 'change_view',
+        description: 'Changes the user\'s calendar view to a specific date, mode, or zoom level. Use this when the user mentions looking at a future date (e.g., "next week", "in 2 weeks") or wants to see a different view (day, week).',
+        parameters: {
+            type: 'object',
+            properties: {
+                date: { type: 'string', description: 'Target date in ISO 8601 format (YYYY-MM-DD)' },
+                viewMode: { type: 'number', description: 'Number of days to show (1, 2, 3, or 7)' },
+                zoomLevel: { type: 'number', description: 'Zoom level (0.5 to 2.0)' }
+            }
+        }
+    }
+  },
+  {
+    type: 'function',
+    function: {
         name: 'propose_slots',
         description: 'Offer a list of specific time slots for the user to choose from. Use this when the user asks "when can I...", "find time for...", or when you need to suggest multiple options before booking. If the user request is vague, propose slots instead of multiple calls to check_availability.',
         parameters: {
@@ -133,7 +148,7 @@ async function executeCalendarFunction(
   const timeZone = process.env.GOOGLE_TIMEZONE || 'UTC'
   const calendarId = process.env.GOOGLE_CALENDAR_ID
 
-  if (functionName === 'propose_slots') {
+  if (functionName === 'propose_slots' || functionName === 'change_view') {
       return { success: true, isUiOnly: true }
   }
 
@@ -268,7 +283,10 @@ IMPORTANT TIMEZONE INFORMATION:
 - When creating or updating events, you MUST use ISO 8601 format WITHOUT timezone suffix (e.g., "2026-01-28T15:00:00")
 - The system will automatically apply the ${timeZone} timezone
 - DO NOT use UTC (Z suffix) or timezone offsets in your datetime strings
-- When modifying event times, carefully calculate the new times based on the original times shown below`
+- When modifying event times, carefully calculate the new times based on the original times shown below
+
+- When suggesting specific time slots to the user (e.g. for a break, meeting, or focused work), you MUST use the 'propose_slots' tool.
+- DO NOT just list the slots in your text response. The UI needs the structured data to display interactive options.`
     
     if (calendarEvents && calendarEvents.length > 0) {
       const eventsText = calendarEvents
@@ -406,6 +424,16 @@ WHEN EXTENDING OR MODIFYING EVENT TIMES:
                       }
                   }
                   controller.enqueue(encoder.encode(`data: ${JSON.stringify(toolDataChunk)}\n\n`))
+              } else if (fc.function.name === 'change_view') {
+                const toolDataChunk = {
+                    tool_result_data: {
+                        type: 'view_update',
+                        date: args.date,
+                        viewMode: args.viewMode,
+                        zoomLevel: args.zoomLevel
+                    }
+                }
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify(toolDataChunk)}\n\n`))
               } else {
                 // Standard text response for other actions
                 const functionResultChunk = {

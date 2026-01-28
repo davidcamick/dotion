@@ -23,6 +23,9 @@ interface CalendarViewProps {
   timeZone: string
   zoomLevel: number
   hoveredSlot?: { start: string, end: string, label?: string } | null
+  recentlyModifiedEventId?: string | null
+  onSelectEvent?: (eventId: string) => void
+  selectedEventId?: string | null
 }
 
 const getEventColor = (eventSummary: string, colorId?: string) => {
@@ -81,7 +84,14 @@ const getEventPosition = (start: string, end: string | null, timeZone: string, h
   return { top, height }
 }
 
-export default function CalendarView({ days, timeZone, zoomLevel, hoveredSlot }: CalendarViewProps) {
+// Split events into tasks (all-day/no time) and timed events
+const getDayData = (day: CalendarDay) => {
+  const tasks = day.events.filter(isAllDayOrTask)
+  const timedEvents = day.events.filter(e => !isAllDayOrTask(e))
+  return { tasks, timedEvents }
+}
+
+export default function CalendarView({ days, timeZone, zoomLevel, hoveredSlot, recentlyModifiedEventId, onSelectEvent, selectedEventId }: CalendarViewProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const currentTimeRef = useRef<HTMLDivElement>(null)
   const [currentTime, setCurrentTime] = useState(new Date())
@@ -103,7 +113,7 @@ export default function CalendarView({ days, timeZone, zoomLevel, hoveredSlot }:
   
   // Auto-scroll to current time on mount and when view changes or zoom changes
   useEffect(() => {
-    if (currentTimeRef.current && scrollContainerRef.current) {
+    if (currentTimeRef.current && scrollContainerRef.current && !hoveredSlot) {
       const container = scrollContainerRef.current
       const timeIndicator = currentTimeRef.current
       const containerHeight = container.clientHeight
@@ -114,8 +124,27 @@ export default function CalendarView({ days, timeZone, zoomLevel, hoveredSlot }:
         behavior: 'smooth'
       })
     }
-  }, [days.length, zoomLevel])
-  
+  }, [days.length, zoomLevel, hoveredSlot])
+
+  // Scroll to hovered slot time
+  useEffect(() => {
+    if (hoveredSlot && scrollContainerRef.current) {
+        const container = scrollContainerRef.current
+        const startDate = new Date(hoveredSlot.start)
+        const startInHours = startDate.getHours() + startDate.getMinutes() / 60
+        
+        const top = Math.max(0, (startInHours - startHour) * hourHeight)
+        
+        const containerHeight = container.clientHeight
+        const scrollTo = top - containerHeight / 2 + (hourHeight / 2)
+        
+        container.scrollTo({
+            top: scrollTo,
+            behavior: 'smooth'
+        })
+    }
+  }, [hoveredSlot, hourHeight, startHour])
+
   // Calculate current time position
   const getCurrentTimePosition = () => {
     const now = currentTime
@@ -125,13 +154,7 @@ export default function CalendarView({ days, timeZone, zoomLevel, hoveredSlot }:
     const top = (timeInHours - startHour) * hourHeight
     return top
   }
-  
-  // Split events into tasks (all-day/no time) and timed events
-  const getDayData = (day: CalendarDay) => {
-    const tasks = day.events.filter(isAllDayOrTask)
-    const timedEvents = day.events.filter(e => !isAllDayOrTask(e))
-    return { tasks, timedEvents }
-  }
+
 
   return (
     <div className="flex flex-col h-full bg-transparent">
@@ -167,9 +190,14 @@ export default function CalendarView({ days, timeZone, zoomLevel, hoveredSlot }:
                 {tasks.map((event) => (
                   <div
                     key={event.id}
-                    className={`text-xs px-2 py-1.5 rounded-md border backdrop-blur-sm transition-all hover:scale-105 ${getEventColor(event.summary, event.colorId)} truncate cursor-pointer`}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onSelectEvent?.(event.id)
+                    }}
+                    className={`relative text-xs px-2 py-1.5 rounded-md border backdrop-blur-sm transition-all hover:scale-105 ${getEventColor(event.summary, event.colorId)} ${event.id === recentlyModifiedEventId ? 'ring-2 ring-white shadow-[0_0_20px_rgba(255,255,255,0.6),0_0_10px_rgba(0,240,255,0.4)] z-50' : ''} ${event.id === selectedEventId ? 'ring-2 ring-space-accent shadow-[0_0_15px_rgba(0,240,255,0.4)]' : ''} truncate cursor-pointer overflow-hidden`}
                   >
-                    <div className="flex items-center gap-1">
+                    {event.id === recentlyModifiedEventId && <div className="shimmer-effect" />}
+                    <div className="flex items-center gap-1 relative z-10">
                       <div className="w-1.5 h-1.5 rounded-full bg-current animate-pulse"></div>
                       <span className="truncate font-medium">{event.summary}</span>
                     </div>
@@ -249,17 +277,22 @@ export default function CalendarView({ days, timeZone, zoomLevel, hoveredSlot }:
                     return (
                       <div
                         key={event.id}
-                        className={`absolute left-1 right-1 rounded-md border backdrop-blur-md transition-all hover:z-20 hover:scale-[1.02] shadow-lg ${getEventColor(event.summary, event.colorId)} overflow-hidden px-2 py-1 cursor-pointer group`}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          onSelectEvent?.(event.id)
+                        }}
+                        className={`absolute left-1 right-1 rounded-md border backdrop-blur-md transition-all hover:z-20 hover:scale-[1.02] ${getEventColor(event.summary, event.colorId)} ${event.id === recentlyModifiedEventId ? 'ring-2 ring-white shadow-[0_0_20px_rgba(255,255,255,0.6),0_0_10px_rgba(0,240,255,0.4)] z-50' : event.id === selectedEventId ? 'ring-2 ring-space-accent shadow-[0_0_15px_rgba(0,240,255,0.4)] z-40' : 'shadow-lg'} overflow-hidden px-2 py-1 cursor-pointer group`}
                         style={{
                           top: `${top}px`,
                           height: `${Math.max(height, 40)}px`,
                         }}
                       >
-                        <div className="text-xs font-semibold truncate group-hover:whitespace-normal">
+                        {event.id === recentlyModifiedEventId && <div className="shimmer-effect" />}
+                        <div className="text-xs font-semibold truncate group-hover:whitespace-normal relative z-10">
                           {event.summary}
                         </div>
                         {height > 30 && (
-                          <div className="text-[10px] opacity-70 flex items-center gap-1 mt-0.5 font-mono">
+                          <div className="text-[10px] opacity-70 flex items-center gap-1 mt-0.5 font-mono relative z-10">
                             <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                             {formatTime(event.start, timeZone)}
                           </div>
