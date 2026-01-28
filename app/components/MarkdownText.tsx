@@ -53,7 +53,7 @@ export default function MarkdownText({ content }: MarkdownTextProps) {
         const codeMatch = line.slice(lineIndex).match(/^`(.+?)`/)
         if (codeMatch) {
           lineElements.push(
-            <code key={`${key++}`} className="bg-gray-700 px-1.5 py-0.5 rounded text-sm font-mono">
+            <code key={`${key++}`} className="bg-white/10 border border-white/10 px-1.5 py-0.5 rounded text-sm font-mono text-space-accent">
               {codeMatch[1]}
             </code>
           )

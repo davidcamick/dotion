@@ -9,6 +9,8 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "classnames": "^2.5.1",
+    "framer-motion": "^12.29.2",
     "googleapis": "^170.1.0",
     "luxon": "^3.7.2",
     "next": "^14.2.0",

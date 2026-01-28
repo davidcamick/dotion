@@ -11,6 +11,31 @@ const tools = [
   {
     type: 'function',
     function: {
+        name: 'propose_slots',
+        description: 'Offer a list of specific time slots for the user to choose from. Use this when the user asks "when can I...", "find time for...", or when you need to suggest multiple options before booking. If the user request is vague, propose slots instead of multiple calls to check_availability.',
+        parameters: {
+            type: 'object',
+            properties: {
+                slots: {
+                    type: 'array',
+                    items: {
+                        type: 'object',
+                        properties: {
+                            start: { type: 'string', description: 'ISO 8601 start time' },
+                            end: { type: 'string', description: 'ISO 8601 end time' },
+                            label: { type: 'string', description: 'Short context (e.g. "After meeting", "Morning slot")' }
+                        },
+                        required: ['start', 'end']
+                    }
+                }
+            },
+            required: ['slots']
+        }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'create_calendar_event',
       description: 'Create a new event on the user\'s Google Calendar. Use this when the user asks to add, create, or schedule an event.',
       parameters: {
@@ -108,6 +133,10 @@ async function executeCalendarFunction(
   const timeZone = process.env.GOOGLE_TIMEZONE || 'UTC'
   const calendarId = process.env.GOOGLE_CALENDAR_ID
 
+  if (functionName === 'propose_slots') {
+      return { success: true, isUiOnly: true }
+  }
+
   if (functionName === 'create_calendar_event') {
     console.log('Create event called with args:', JSON.stringify(args, null, 2))
     
@@ -177,19 +206,25 @@ async function executeCalendarFunction(
     })
     
     console.log('Update successful:', event.data.id)
-    return { success: true, eventId: event.data.id, summary: event.data.summary }
+    return { success: true, eventId: event.data.id, summary: event.data.summary, originalEvent: existingEvent.data }
   }
 
   if (functionName === 'delete_calendar_event') {
     console.log('Delete event called with eventId:', args.eventId)
     
+    // Fetch first for undo context
+    const event = await calendar.events.get({
+      calendarId,
+      eventId: args.eventId,
+    })
+
     await calendar.events.delete({
       calendarId,
       eventId: args.eventId,
     })
     
     console.log('Delete successful')
-    return { success: true }
+    return { success: true, eventId: args.eventId, summary: event.data.summary, originalEvent: event.data }
   }
 
   return { error: 'Unknown function' }
@@ -349,16 +384,41 @@ WHEN EXTENDING OR MODIFYING EVENT TIMES:
               console.log(`Function result:`, result)
 
               // Send function result back to stream
-              const functionResultChunk = {
-                choices: [{
-                  delta: {
-                    content: `\n\n✓ ${fc.function.name === 'create_calendar_event' ? 'Created' : fc.function.name === 'update_calendar_event' ? 'Updated' : 'Deleted'} calendar event${result.summary ? `: ${result.summary}` : ''}`
-                  },
-                  index: 0,
-                  finish_reason: null
-                }]
+              if (result.success && (fc.function.name === 'create_calendar_event' || fc.function.name === 'update_calendar_event' || fc.function.name === 'delete_calendar_event')) {
+                // Send specialized UI data
+                const toolDataChunk = {
+                  tool_result_data: {
+                    type: fc.function.name.replace('_calendar_event', ''),
+                    eventId: result.eventId,
+                    summary: result.summary,
+                    start: args.start || result.originalEvent?.start?.dateTime || result.originalEvent?.start?.date,
+                    end: args.end || result.originalEvent?.end?.dateTime || result.originalEvent?.end?.date,
+                    location: args.location || result.originalEvent?.location,
+                    originalEvent: result.originalEvent
+                  }
+                }
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify(toolDataChunk)}\n\n`))
+              } else if (fc.function.name === 'propose_slots' && args.slots) {
+                  const toolDataChunk = {
+                      tool_result_data: {
+                          type: 'slots',
+                          slots: args.slots
+                      }
+                  }
+                  controller.enqueue(encoder.encode(`data: ${JSON.stringify(toolDataChunk)}\n\n`))
+              } else {
+                // Standard text response for other actions
+                const functionResultChunk = {
+                  choices: [{
+                    delta: {
+                      content: `\n\n✓ ${fc.function.name === 'create_calendar_event' ? 'Created' : fc.function.name === 'update_calendar_event' ? 'Updated' : 'Deleted'} calendar event${result.summary ? `: ${result.summary}` : ''}`
+                    },
+                    index: 0,
+                    finish_reason: null
+                  }]
+                }
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify(functionResultChunk)}\n\n`))
               }
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify(functionResultChunk)}\n\n`))
 
               // Signal calendar refresh needed
               controller.enqueue(encoder.encode(`data: ${JSON.stringify({ refresh_calendar: true })}\n\n`))

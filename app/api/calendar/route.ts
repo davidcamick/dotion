@@ -135,20 +135,21 @@ export async function POST(req: Request) {
 
     const timeZone = process.env.GOOGLE_TIMEZONE || 'UTC'
 
+    const buildTime = (dateStr: string) => {
+       if (dateStr.includes('T')) {
+         return { dateTime: dateStr, timeZone }
+       }
+       return { date: dateStr }
+    }
+
     const event = await calendar.events.insert({
       calendarId: process.env.GOOGLE_CALENDAR_ID,
       requestBody: {
         summary,
         description,
         location,
-        start: {
-          dateTime: start,
-          timeZone,
-        },
-        end: {
-          dateTime: end || start,
-          timeZone,
-        },
+        start: buildTime(start),
+        end: buildTime(end || start),
       },
     })
 
@@ -190,15 +191,22 @@ export async function PUT(req: Request) {
 
     const timeZone = process.env.GOOGLE_TIMEZONE || 'UTC'
 
+    const buildTime = (dateStr: string) => {
+       if (dateStr.includes('T')) {
+         return { dateTime: dateStr, timeZone }
+       }
+       return { date: dateStr }
+    }
+
     const updateData: any = {}
     if (summary !== undefined) updateData.summary = summary
     if (description !== undefined) updateData.description = description
     if (location !== undefined) updateData.location = location
     if (start !== undefined) {
-      updateData.start = { dateTime: start, timeZone }
+      updateData.start = buildTime(start)
     }
     if (end !== undefined) {
-      updateData.end = { dateTime: end, timeZone }
+      updateData.end = buildTime(end)
     }
 
     const event = await calendar.events.patch({
