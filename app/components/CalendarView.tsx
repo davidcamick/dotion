@@ -177,38 +177,6 @@ export default function CalendarView({ days, timeZone, zoomLevel, hoveredSlot, r
         </div>
       </div>
 
-      {/* Tasks/All-day events section */}
-      <div className="flex border-b border-white/10 bg-black/20 min-h-[80px]">
-        <div className="w-16 flex-shrink-0 flex items-start justify-center pt-3 border-r border-white/5">
-          <span className="text-[10px] text-gray-500 uppercase tracking-widest -rotate-90 mt-4 origin-center">Tasks</span>
-        </div>
-        <div className="flex flex-1">
-          {days.map((day) => {
-            const { tasks } = getDayData(day)
-            return (
-              <div key={`tasks-${day.date}`} className="flex-1 px-1 py-2 border-l border-white/5 space-y-1">
-                {tasks.map((event) => (
-                  <div
-                    key={event.id}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onSelectEvent?.(event.id)
-                    }}
-                    className={`relative text-xs px-2 py-1.5 rounded-md border backdrop-blur-sm transition-all hover:scale-105 ${getEventColor(event.summary, event.colorId)} ${event.id === recentlyModifiedEventId ? 'ring-2 ring-white shadow-[0_0_20px_rgba(255,255,255,0.6),0_0_10px_rgba(0,240,255,0.4)] z-50' : ''} ${event.id === selectedEventId ? 'ring-2 ring-space-accent shadow-[0_0_15px_rgba(0,240,255,0.4)]' : ''} truncate cursor-pointer overflow-hidden`}
-                  >
-                    {event.id === recentlyModifiedEventId && <div className="shimmer-effect" />}
-                    <div className="flex items-center gap-1 relative z-10">
-                      <div className="w-1.5 h-1.5 rounded-full bg-current animate-pulse"></div>
-                      <span className="truncate font-medium">{event.summary}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )
-          })}
-        </div>
-      </div>
-
       {/* Time grid */}
       <div className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent" ref={scrollContainerRef}>
         <div className="flex relative">

@@ -27,7 +27,7 @@ const tools = [
     type: 'function',
     function: {
         name: 'propose_slots',
-        description: 'Offer a list of specific time slots for the user to choose from. Use this when the user asks "when can I...", "find time for...", or when you need to suggest multiple options before booking. If the user request is vague, propose slots instead of multiple calls to check_availability.',
+        description: 'VITAL: You MUST use this tool whenever you want to suggest time slots to the user. The user CANNOT see slots unless you use this tool. Use this for requests like "when can I...", "find time for...", "suggest a time".',
         parameters: {
             type: 'object',
             properties: {
@@ -286,7 +286,21 @@ IMPORTANT TIMEZONE INFORMATION:
 - When modifying event times, carefully calculate the new times based on the original times shown below
 
 - When suggesting specific time slots to the user (e.g. for a break, meeting, or focused work), you MUST use the 'propose_slots' tool.
-- DO NOT just list the slots in your text response. The UI needs the structured data to display interactive options.`
+- DO NOT just list the slots in your text response. The UI needs the structured data to display interactive options.
+- If you say "Here are some options" or "I found some times", you MUST call 'propose_slots' in the same turn.
+
+CRITICAL PRESENTATION STYLE:
+- You MUST provide a brief, friendly conversational summary properly answering the user's request.
+- When finding slots or events, summarize the context (e.g. "You have class and Bible study today, but I found a few breaks.") before distinguishing the UI elements.
+- DO NOT list specific times or event details in the text if they are going to be shown in a UI card.
+- Assume the user can see the UI cards, so your text should just be a friendly conversational lead-in.
+- Be concise and sound like a helpful friend (using words like "I found", "Here are", "Check these out").
+
+CRITICAL UI INTERACTION LOGIC:
+- If the user selects a slot (e.g., says "I'll take the slot: ..."), you MUST immediately call 'create_calendar_event' with those details.
+- Use the date/time information from the user's message to fill the start/end times.
+- Derive a summary from the slot label (e.g. "Nap", "Study Session") or the conversation context.
+- Do not ask for confirmation again; just book it.`
     
     if (calendarEvents && calendarEvents.length > 0) {
       const eventsText = calendarEvents
@@ -324,7 +338,7 @@ IMPORTANT TIMEZONE INFORMATION:
         })
         .join('\n\n')
       
-      systemMessage += `\n\nHere is the user's calendar for this week:\n\n${eventsText}\n\nYou can reference these events when answering questions about the user's schedule. When the user asks to modify or delete an event, use the event ID shown above.
+      systemMessage += `\n\nHere is the user's upcoming calendar schedule (next few weeks):\n\n${eventsText}\n\nYou can reference these events when answering questions about the user's schedule. When the user asks to modify or delete an event, use the event ID shown above.`
 
 WHEN EXTENDING OR MODIFYING EVENT TIMES:
 1. Look at the current start/end times shown above
@@ -337,13 +351,33 @@ WHEN EXTENDING OR MODIFYING EVENT TIMES:
       systemMessage += `\n\nYou have access to manage the user's Google Calendar. You can create new events, update existing events, or delete events using the provided functions.`
     }
 
+    // Pre-process messages to inject toolData context
+    const processedMessages = messages.map((msg: any) => {
+      if (msg.role === 'assistant' && msg.toolData) {
+        let contextInjection = ''
+        if (msg.toolData.type === 'event' || msg.toolData.type === 'create' || msg.toolData.type === 'update') {
+           contextInjection = `\n\n[SYSTEM CONTEXT: I just executed a calendar operation. Event ID: ${msg.toolData.eventId}. Summary: "${msg.toolData.summary}". Time: ${msg.toolData.start} to ${msg.toolData.end}. If the user asks to "move", "change", or "delete" this, use this ID.]`
+        }
+        
+        // Return a clean message object for OpenAI, without the custom 'toolData' property
+        return {
+           role: msg.role,
+           content: msg.content + contextInjection
+        }
+      }
+      
+      // Strip toolData from user messages if present (though unlikely)
+      const { toolData, ...cleanMsg } = msg
+      return cleanMsg
+    })
+
     const messagesWithSystem = [
       { role: 'system', content: systemMessage },
-      ...messages
+      ...processedMessages
     ]
 
     const stream = await openai.chat.completions.create({
-      model: 'gpt-5-mini',
+      model: 'gpt-4o',
       messages: messagesWithSystem,
       tools: isAuthed ? tools : undefined,
       stream: true,

@@ -276,6 +276,11 @@ export default function Home() {
     }])
   }
 
+  const handleCopyChat = () => {
+    const chatLog = messages.map(m => `[${m.role.toUpperCase()}]\n${m.content}${m.toolData ? `\n[TOOL DATA]: ${JSON.stringify(m.toolData, null, 2)}` : ''}`).join('\n\n---\n\n')
+    navigator.clipboard.writeText(chatLog)
+  }
+
   const handleSlotSelection = (slot: { start: string, end: string, label?: string }) => {
     // Send a message to the AI that the user selected this slot
     const selectionMessage = `I'll take the slot: ${slot.label ? slot.label + ' ' : ''}${new Date(slot.start).toLocaleString()} - ${new Date(slot.end).toLocaleTimeString()}`
@@ -318,6 +323,20 @@ export default function Home() {
     // Usually modifying it once clears the ambiguity, but keeping it allows "move it again".
     // Let's keep it selected until user unselects or selects another.
 
+    // Filter relevant events to reduce token usage and noise for the AI
+    // Send 3 days of past history and 21 days of future
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    const pastLimit = new Date(now);
+    pastLimit.setDate(now.getDate() - 3);
+    const futureLimit = new Date(now);
+    futureLimit.setDate(now.getDate() + 21);
+
+    const relevantCalendarEvents = calendarDays.filter(day => {
+        const dayDate = new Date(day.date);
+        return dayDate >= pastLimit && dayDate <= futureLimit;
+    });
+
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -326,7 +345,7 @@ export default function Home() {
         },
         body: JSON.stringify({
           messages: [...messages, userMessage],
-          calendarEvents: calendarDays,
+          calendarEvents: relevantCalendarEvents,
         }),
       })
 
@@ -529,6 +548,13 @@ export default function Home() {
                     className="text-[10px] uppercase tracking-widest text-red-400/70 hover:text-red-400 hover:bg-red-400/10 px-2 py-1 rounded transition-colors"
                     >
                     Del
+                    </button>
+                    <div className="w-px bg-white/10 mx-1"></div>
+                    <button
+                    onClick={handleCopyChat}
+                    className="text-[10px] uppercase tracking-widest text-cyan-400/70 hover:text-cyan-400 hover:bg-cyan-400/10 px-2 py-1 rounded transition-colors"
+                    >
+                    Copy
                     </button>
                 </div>
 

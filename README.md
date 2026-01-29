@@ -10,6 +10,34 @@ A super modern and minimal ChatGPT wrapper built with Next.js, TypeScript, and T
 - ⚡ **Fast** - Built with Next.js 14 App Router
 - 🔒 **Secure** - API key stored in environment variables
 
+## 🧠 AI Architecture
+
+Dotion uses a sophisticated AI integration (powered by `gpt-4o`) that acts as a fully capable calendar agent, not just a chatbot.
+
+### Context Window
+Every request includes a highly optimized context package:
+- **System Time & Timezone:** Precise execution of "tomorrow", "next Friday", etc.
+- **Calendar Data:** A filtered view of user's events (Past 3 days to Future 21 days) to reduce token usage while maintaining relevant context.
+- **Short-term Memory:** Recent tool outputs (e.g., "I just created event ID 123") are injected into the context so the AI can "remember" and modify what it just did.
+
+### AI Tools & UI Components
+The AI doesn't just output text; it drives the React UI via structured tool calls:
+
+| AI Function | Behavior | UI Component |
+|-------------|----------|--------------|
+| `propose_slots` | Suggests multiple times for meetings/breaks | **Slot Picker:** Interactive, selectable chips. Clicking one instantly books the slot. |
+| `create_calendar_event` | Adds a new event to Google Calendar | **Event Card:** A specialized "Created" card with summary details. |
+| `update_calendar_event` | Modifies time, title, or details | **Event Card:** Shows the "Updated" state and remembers the ID for further referencing. |
+| `delete_calendar_event` | Removes an event | **Event Card:** A "Deleted" confirmation card. |
+| `change_view` | Navigates the calendar visually | **Calendar View:** Automatically jumps to specific dates, changes zoom level (0.5x-2x), or switches modes (Day/Week). |
+
+### Data Flow
+1. **User Input:** "Find time for a nap on Friday."
+2. **Server:** Injects calendar data + system prompts & streams response.
+3. **AI Decision:** Calls `propose_slots` with calculated free times.
+4. **Client-Side Hydration:** The generic tool JSON is intercepted and hydrated into the interactive `<SlotPicker />` component within the chat stream.
+5. **Action:** User clicks a slot -> Client sends "I'll take [Slot]" -> AI triggers `create_calendar_event` -> UI shows generic `<CalendarEventCard />` success.
+
 ## Setup
 
 1. **Install dependencies**
