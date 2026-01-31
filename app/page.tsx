@@ -50,9 +50,47 @@ export default function Home() {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  
+  // UI States for App Mode
+  const [appMode, setAppMode] = useState<'bar' | 'chat' | 'calendar'>('bar')
+  const [showCalendar, setShowCalendar] = useState(false)
 
   const [calendarDays, setCalendarDays] = useState<CalendarDay[]>([])
   const [focusedDate, setFocusedDate] = useState(new Date()) // Target date for view
+  
+  // Resize Effect based on Mode
+  useEffect(() => {
+    // Check if running in Electron 
+    if ((window as any).electron) {
+        if (appMode === 'bar') {
+            (window as any).electron.resizeWindow(750, 80)
+        } else if (appMode === 'chat') {
+            (window as any).electron.resizeWindow(750, 600)
+        } else if (appMode === 'calendar') {
+            (window as any).electron.resizeWindow(1150, 600)
+        }
+    }
+  }, [appMode])
+
+  // Automatically switch to chat mode if there are messages
+  useEffect(() => {
+    if (messages.length > 0 && appMode === 'bar') {
+        setAppMode('chat')
+    }
+  }, [messages])
+  
+  // Detect if calendar is mentioned or used
+  useEffect(() => {
+    // If any message has toolData of type 'event' or 'slots', show calendar
+    // Or if user specifically asks for it (maybe heuristic)
+    const hasCalendarContext = messages.some(m => m.toolData)
+    
+    if (hasCalendarContext && appMode !== 'calendar') {
+        setAppMode('calendar')
+        setShowCalendar(true)
+    }
+  }, [messages])
+
   const [isFetchingMore, setIsFetchingMore] = useState(false)
 
   const [calendarError, setCalendarError] = useState<string | null>(null)
@@ -94,6 +132,35 @@ export default function Home() {
     scrollToBottom()
   }, [messages])
 
+  // Global Keyboard Shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (selectedEventId) {
+            setSelectedEventId(null)
+            return
+        }
+        
+        if (input.length > 0) {
+             setInput('')
+             return
+        }
+
+        if (appMode !== 'bar') {
+            handleNewChat() // Reusing the full reset logic
+            return
+        }
+
+        if ((window as any).electron) {
+            (window as any).electron.hideWindow()
+        }
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [input, appMode, selectedEventId])
+
   const fetchCalendarData = async (targetDate?: Date) => {
     const dateStr = (targetDate || focusedDate).toISOString().split('T')[0]
     
@@ -116,6 +183,30 @@ export default function Home() {
       setCalendarError('Unable to load calendar events.')
     }
   }
+
+  const [lastActivity, setLastActivity] = useState(Date.now())
+
+  // Reset chat after 1 minute of inactivity
+  useEffect(() => {
+    const checkActivity = setInterval(() => {
+        if (Date.now() - lastActivity > 60000 && appMode !== 'bar') {
+            handleNewChat()
+        }
+    }, 5000)
+
+    const updateActivity = () => setLastActivity(Date.now())
+    
+    window.addEventListener('mousemove', updateActivity)
+    window.addEventListener('keydown', updateActivity)
+    window.addEventListener('click', updateActivity)
+
+    return () => {
+        clearInterval(checkActivity)
+        window.removeEventListener('mousemove', updateActivity)
+        window.removeEventListener('keydown', updateActivity)
+        window.removeEventListener('click', updateActivity)
+    }
+  }, [lastActivity, appMode])
 
   useEffect(() => {
     const init = async () => {
@@ -156,7 +247,8 @@ export default function Home() {
   }
 
   const handleSignIn = () => {
-    window.location.href = '/api/google/auth'
+    // Open in new window to trigger Electron's setWindowOpenHandler
+    window.open('/api/google/auth', '_blank')
   }
 
   const handleSignOut = async () => {
@@ -169,6 +261,9 @@ export default function Home() {
   const handleNewChat = () => {
     setMessages([])
     setInput('')
+    setAppMode('bar')
+    setSelectedEventId(null)
+    setShowCalendar(false)
   }
 
   const refreshCalendar = async () => {
@@ -495,22 +590,19 @@ export default function Home() {
     )
   }
 
-  if (!isAuthed) {
-    return <LoginView onSignIn={handleSignIn} />
-  }
-
   return (
-    <main className="min-h-screen">
-      <div className="stars"></div>
-      <div className="mx-auto flex h-screen w-full flex-col gap-6 px-4 py-6 lg:flex-row relative z-10">
+    <main className="h-screen w-screen overflow-hidden bg-transparent">
+      {appMode !== 'bar' && <div className="stars"></div>}
+      <div className={`mx-auto flex h-full w-full flex-col ${appMode === 'calendar' ? 'gap-6 px-4 py-6' : 'gap-0 p-0'} lg:flex-row relative z-10 transition-all duration-300`}>
         {/* Chat panel */}
         <motion.section 
           initial={{ opacity: 0, x: -50 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.6, ease: "easeOut" }}
-          className="flex min-h-0 flex-1 flex-col rounded-2xl glass-panel shadow-lg lg:w-1/3 overflow-hidden"
+          className={`flex min-h-0 flex-1 flex-col ${appMode === 'bar' ? 'rounded-lg' : 'rounded-2xl'} glass-panel shadow-lg ${appMode === 'calendar' ? 'lg:w-1/3' : 'w-full'} overflow-hidden transition-all duration-300`}
         >
           {/* Header */}
+          {appMode !== 'bar' && (
           <div className="p-6 border-b border-white/10 bg-white/5 flex justify-between items-center">
             <div>
               <motion.div
@@ -569,8 +661,10 @@ export default function Home() {
                 </button>
             </motion.div>
           </div>
+          )}
 
           {/* Messages */}
+          {appMode !== 'bar' && (
           <div className="flex-1 overflow-y-auto p-6 space-y-4 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
             {messages.length === 0 && (
               <div className="flex items-center justify-center h-full">
@@ -594,7 +688,10 @@ export default function Home() {
                         initial={{ opacity: 0, y: 10 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ delay: i * 0.1 }}
-                        onClick={() => setInput(prompt)}
+                        onClick={() => {
+                            setInput(prompt)
+                            setAppMode('chat')
+                        }}
                         className="text-left px-4 py-3 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 hover:border-space-accent/30 hover:shadow-[0_0_10px_rgba(0,240,255,0.1)] transition-all text-sm text-gray-300 hover:text-white group"
                       >
                          <span className="text-space-accent/50 group-hover:text-space-accent mr-2">›</span>
@@ -666,9 +763,16 @@ export default function Home() {
             </AnimatePresence>
             <div ref={messagesEndRef} />
           </div>
+          )}
 
           {/* Input */}
-          <div className="p-6 border-t border-white/10 bg-white/5 relative">
+          <div className={`${appMode === 'bar' ? 'p-0 bg-transparent h-full' : 'p-6 border-t border-white/10 bg-white/5 h-auto'} relative flex flex-col justify-center transition-all duration-300`}>
+            {/* Drag Region for Bar Mode */}
+            {appMode === 'bar' && (
+               <div className="absolute top-0 left-0 w-4 h-full cursor-grab z-20 flex items-center justify-center opacity-30 hover:opacity-100 transition-opacity drag-region">
+                  <div className="h-4 w-1 rounded-full bg-white/20"></div>
+               </div>
+            )}
             <AnimatePresence>
             {selectedEventId && (
               <motion.div 
@@ -692,27 +796,48 @@ export default function Home() {
               </motion.div>
             )}
             </AnimatePresence>
-            <form onSubmit={handleSubmit} className="flex gap-4">
-              <input
-                type="text"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="Type command..."
-                disabled={isLoading}
-                className="flex-1 rounded-xl px-6 py-4 bg-black/20 border border-white/10 text-white placeholder-gray-500 focus:outline-none focus:border-space-accent/50 focus:bg-black/40 transition-all disabled:opacity-50"
-              />
-              <button
-                type="submit"
-                disabled={isLoading || !input.trim()}
-                className="px-8 py-4 bg-space-accent/10 border border-space-accent/30 text-space-accent hover:bg-space-accent/20 rounded-xl font-semibold focus:outline-none focus:ring-2 focus:ring-space-accent/50 disabled:opacity-50 disabled:cursor-not-allowed transition-all uppercase tracking-wider text-sm shadow-[0_0_10px_rgba(0,240,255,0.1)] hover:shadow-[0_0_20px_rgba(0,240,255,0.3)]"
-              >
-                {isLoading ? 'Processing...' : 'Send'}
-              </button>
+            <form onSubmit={handleSubmit} className={`flex items-center gap-4 ${appMode === 'bar' ? 'h-full pl-6 pr-4' : ''}`}>
+               {appMode === 'bar' && isAuthed && (
+                  <svg className="w-6 h-6 text-space-accent/70 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+               )}
+              
+              {!isAuthed ? (
+                  <button
+                    type="button"
+                    onClick={handleSignIn}
+                    className="flex-1 flex items-center justify-center gap-3 w-full h-full bg-transparent hover:bg-white/5 transition-colors rounded-xl group"
+                  >
+                        <span className="font-light text-xl text-gray-300 group-hover:text-white transition-colors">
+                            Connect <span className="font-bold text-space-accent">DOTION</span> to Google Calendar
+                        </span>
+                        <svg className="w-5 h-5 text-gray-400 group-hover:text-white transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" /></svg>
+                  </button>
+              ) : (
+                <>
+                <input
+                    type="text"
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    placeholder={appMode === 'bar' ? "Ask Dotion..." : "Type command..."}
+                    disabled={isLoading}
+                    autoFocus
+                    className={`flex-1 ${appMode === 'bar' ? 'bg-transparent border-none text-xl p-0 h-full focus:ring-0 placeholder-white/30' : 'rounded-xl px-6 py-4 bg-black/20 border border-white/10 focus:border-space-accent/50 focus:bg-black/40'} text-white placeholder-gray-500 focus:outline-none transition-all disabled:opacity-50`}
+                />
+                <button
+                    type="submit"
+                    disabled={isLoading || !input.trim()}
+                    className={`${appMode === 'bar' ? 'hidden' : 'px-8 py-4 bg-space-accent/10 border border-space-accent/30 text-space-accent hover:bg-space-accent/20 rounded-xl font-semibold focus:outline-none focus:ring-2 focus:ring-space-accent/50 disabled:opacity-50 disabled:cursor-not-allowed transition-all uppercase tracking-wider text-sm shadow-[0_0_10px_rgba(0,240,255,0.1)] hover:shadow-[0_0_20px_rgba(0,240,255,0.3)]'}`}
+                >
+                    {isLoading ? 'Processing...' : 'Send'}
+                </button>
+                </>
+              )}
             </form>
           </div>
         </motion.section>
 
         {/* Calendar panel */}
+        {appMode === 'calendar' && (
         <motion.aside 
           initial={{ opacity: 0, x: 50 }}
           animate={{ opacity: 1, x: 0 }}
@@ -828,10 +953,13 @@ export default function Home() {
                   zoomLevel={zoomLevel} 
                   hoveredSlot={hoveredSlot}
                   recentlyModifiedEventId={recentlyModifiedEventId}
+                  onSelectEvent={handleSelectEvent}
+                  selectedEventId={selectedEventId}
               />
             )}
           </div>
         </motion.aside>
+        )}
       </div>
     </main>
   )

@@ -10,13 +10,27 @@
 
 body {
   color: rgb(var(--foreground-rgb));
+  background: transparent; /* Changed from fixed gradient to transparent for Electron */
+  overflow: hidden; /* Hide scrollbars generally */
+  /* Make the app draggable */
+  -webkit-user-select: none;
+}
+
+/* Base style for the main app container to give it the glass look */
+.app-container {
   background: linear-gradient(
       to bottom,
-      rgb(var(--background-start-rgb)),
-      rgb(var(--background-end-rgb))
-    )
-    fixed;
-  overflow-x: hidden;
+      rgba(3, 3, 5, 0.85),
+      rgba(10, 10, 18, 0.95)
+    );
+  height: 100vh;
+  width: 100vw;
+  display: flex;
+  flex-direction: column;
+}
+
+button, input, textarea, .no-drag {
+  -webkit-app-region: no-drag;
 }
 
 /* Stars background effect */

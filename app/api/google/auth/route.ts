@@ -29,6 +29,7 @@ export async function GET() {
       'openid email profile https://www.googleapis.com/auth/calendar',
     include_granted_scopes: 'true',
     state,
+    access_type: 'offline', // Request refresh token
     prompt: 'consent',
   })
 
