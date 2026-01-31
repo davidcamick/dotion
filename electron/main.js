@@ -178,6 +178,90 @@ function createWindow() {
   ipcRenderer.on('hide-window', () => {
     mainWindow.hide()
   })
+
+  ipcRenderer.on('manage-app', (event, { appName, action }) => {
+    const { exec } = require('child_process');
+    const sanitizedAppName = appName.replace(/"/g, '\\"');
+    console.log(`Manage App: ${action} ${sanitizedAppName}`);
+    
+    let command = '';
+    
+    switch (action) {
+        case 'launch':
+        case 'focus': // 'open -a' also focuses/activates if already running
+            command = `open -a "${sanitizedAppName}"`;
+            break;
+        case 'quit':
+            // Try multiple methods for robustness
+            // 1. AppleScript Quit (Graceful)
+            command = `osascript -e 'quit app "${sanitizedAppName}"'`;
+            break;
+        case 'minimize':
+            // Use system events to set visible to false. 
+            // Requires the exact process name. 
+            // If "Messages" fails, it might be due to "Messages" vs "MobileSMS" (historically) or similar,
+            // but usually it works if permissions are granted.
+            // We can also try Cmd+H (Hide) injection if frontmost? No, unsafe.
+            // Try a more robust AppleScript that ignores errors
+            command = `osascript -e 'try
+                tell application "System Events"
+                    set visible of process "${sanitizedAppName}" to false
+                end tell
+            on error
+                -- Fallback: try to find process containing name
+                tell application "System Events"
+                    set proc to first process whose name contains "${sanitizedAppName}"
+                    set visible of proc to false
+                end tell
+            end try'`;
+            break;
+    }
+
+    if (command) {
+        exec(command, (error, stdout, stderr) => {
+            if (error) {
+                console.error(`exec error: ${error}`);
+                // For quit, if standard quit fails, we could try kill?
+                // But that is dangerous. 
+            }
+        });
+    }
+  })
+
+  ipcRenderer.handle('get-running-apps', async () => {
+      const { exec } = require('child_process');
+      return new Promise((resolve) => {
+          // Use 'application process' instead of 'process' for better filtering and stability
+          // Also wrap in try/catch to handle permission issues gracefully
+          const script = `
+            try
+                tell application "System Events"
+                    get name of every application process whose background only is false
+                end tell
+            on error
+                return ""
+            end try
+          `;
+          
+          exec(`osascript -e '${script}'`, (error, stdout, stderr) => {
+              if (error) {
+                  // Only log if it's not the common permission error (which user might ignore)
+                  if (!stderr.includes('(-1719)')) {
+                       console.error('Failed to get running apps:', error.message);
+                  }
+                  resolve([]);
+                  return;
+              }
+              if (!stdout.trim()) {
+                  resolve([]);
+                  return;
+              }
+              // AppleScript returns comma separated list: "App1, App2, App3"
+              const apps = stdout.trim().split(', ').map(s => s.trim());
+              resolve(apps);
+          });
+      });
+  })
 }
 
 function toggleWindow() {

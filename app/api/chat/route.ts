@@ -26,6 +26,39 @@ const tools = [
   {
     type: 'function',
     function: {
+      name: 'manage_app',
+      description: 'Control applications on the user\'s computer. Use this to launch, quit, minimize, or bring apps to the front.',
+      parameters: {
+        type: 'object',
+        properties: {
+          appName: {
+            type: 'string',
+            description: 'The name of the application (e.g., "Visual Studio Code", "Spotify", "Chrome").'
+          },
+          action: {
+            type: 'string',
+            enum: ['launch', 'quit', 'minimize', 'focus'],
+            description: 'The action to perform on the application.'
+          }
+        },
+        required: ['appName', 'action']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_open_apps',
+      description: 'Check the list of currently running applications. Use this tool when the user asks "what apps are open?", "what is running?", or similar questions about the system state.',
+      parameters: {
+        type: 'object',
+        properties: {},
+      },
+    }
+  },
+  {
+    type: 'function',
+    function: {
         name: 'propose_slots',
         description: 'VITAL: You MUST use this tool whenever you want to suggest time slots to the user. The user CANNOT see slots unless you use this tool. Use this for requests like "when can I...", "find time for...", "suggest a time".',
         parameters: {
@@ -247,7 +280,7 @@ async function executeCalendarFunction(
 
 export async function POST(req: NextRequest) {
   try {
-    const { messages, calendarEvents } = await req.json()
+    const { messages, calendarEvents, runningApps } = await req.json()
 
     if (!process.env.OPENAI_API_KEY) {
       return NextResponse.json(
@@ -284,6 +317,9 @@ IMPORTANT TIMEZONE INFORMATION:
 - The system will automatically apply the ${timeZone} timezone
 - DO NOT use UTC (Z suffix) or timezone offsets in your datetime strings
 - When modifying event times, carefully calculate the new times based on the original times shown below
+
+CURRENT SYSTEM STATUS:
+${runningApps ? `- Open Applications: ${runningApps.join(', ')}` : '- Open Applications: Unknown'}
 
 - When suggesting specific time slots to the user (e.g. for a break, meeting, or focused work), you MUST use the 'propose_slots' tool.
 - DO NOT just list the slots in your text response. The UI needs the structured data to display interactive options.
@@ -385,7 +421,9 @@ WHEN EXTENDING OR MODIFYING EVENT TIMES:
     const stream = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: messagesWithSystem,
-      tools: isAuthed ? tools : undefined,
+      tools: tools.filter(t => isAuthed || t.function.name === 'manage_app' || t.function.name === 'get_open_apps').length > 0 
+        ? tools.filter(t => isAuthed || t.function.name === 'manage_app' || t.function.name === 'get_open_apps') 
+        : undefined,
       stream: true,
     })
 
@@ -427,13 +465,69 @@ WHEN EXTENDING OR MODIFYING EVENT TIMES:
         }
 
         // Execute function calls if any
-        if (functionCalls.length > 0 && accessToken) {
+        if (functionCalls.length > 0) {
           console.log(`Executing ${functionCalls.length} function call(s)`)
           for (const fc of functionCalls) {
             try {
               console.log(`Calling function: ${fc.function.name}`)
               console.log(`Raw arguments: ${fc.function.arguments}`)
               const args = JSON.parse(fc.function.arguments)
+
+              if (fc.function.name === 'get_open_apps') {
+                  const toolDataChunk = {
+                      tool_result_data: {
+                          type: 'list_apps',
+                          apps: runningApps || []
+                      }
+                  }
+                  controller.enqueue(encoder.encode(`data: ${JSON.stringify(toolDataChunk)}\n\n`))
+                  const functionResultChunk = {
+                    choices: [{
+                      delta: {
+                        content: `\n\n✓ Checking active applications...` 
+                      },
+                      index: 0,
+                      finish_reason: null
+                    }]
+                  }
+                  controller.enqueue(encoder.encode(`data: ${JSON.stringify(functionResultChunk)}\n\n`))
+                  continue;
+              }
+
+              if (fc.function.name === 'manage_app') {
+                  // Ensure tool data is enqueued FIRST
+                  const toolDataChunk = {
+                      tool_result_data: {
+                          type: 'manage_app',
+                          appName: args.appName,
+                          action: args.action
+                      }
+                  }
+                  const toolDataString = `data: ${JSON.stringify(toolDataChunk)}\n\n`
+                  controller.enqueue(encoder.encode(toolDataString))
+                  
+                  // Small delay to ensure client processes tool data before text?
+                  // Usually not needed but safe for ordering.
+                  
+                  const actionLabel = args.action === 'launch' ? 'Launching' : 
+                                      args.action === 'quit' ? 'Quitting' : 
+                                      args.action === 'minimize' ? 'Minimizing' : 'Focusing';
+                                      
+                  const functionResultChunk = {
+                    choices: [{
+                      delta: {
+                        content: `\n\n✓ ${actionLabel} ${args.appName}...` 
+                      },
+                      index: 0,
+                      finish_reason: null
+                    }]
+                  }
+                  controller.enqueue(encoder.encode(`data: ${JSON.stringify(functionResultChunk)}\n\n`))
+                  continue;
+              }
+
+              if (!accessToken) continue;
+
               const result = await executeCalendarFunction(
                 fc.function.name,
                 args,

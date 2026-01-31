@@ -7,12 +7,14 @@ import MarkdownText from './components/MarkdownText'
 import LoginView from './components/LoginView'
 import CalendarEventCard from './components/CalendarEventCard'
 import SlotPicker from './components/SlotPicker'
+import RecentAppsView from './components/RecentAppsView'
+import AppControlCard from './components/AppControlCard'
 
 interface Message {
   role: 'user' | 'assistant'
   content: string
   toolData?: {
-    type: 'event' | 'slots'
+    type: 'event' | 'slots' | 'launch_app' | 'manage_app' | 'list_apps'
     // Event data
     eventType?: string
     eventId?: string
@@ -20,6 +22,10 @@ interface Message {
     start?: string
     end?: string
     location?: string
+    // App data
+    appName?: string
+    action?: 'launch' | 'quit' | 'minimize' | 'focus'
+    apps?: string[]
     originalEvent?: any
     // Slot data
     slots?: Array<{
@@ -52,8 +58,9 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false)
   
   // UI States for App Mode
-  const [appMode, setAppMode] = useState<'bar' | 'chat' | 'calendar'>('bar')
+  const [appMode, setAppMode] = useState<'bar' | 'chat' | 'calendar' | 'launcher'>('bar')
   const [showCalendar, setShowCalendar] = useState(false)
+  const [launchedApps, setLaunchedApps] = useState<string[]>([])
 
   const [calendarDays, setCalendarDays] = useState<CalendarDay[]>([])
   const [focusedDate, setFocusedDate] = useState(new Date()) // Target date for view
@@ -68,6 +75,8 @@ export default function Home() {
             (window as any).electron.resizeWindow(750, 600)
         } else if (appMode === 'calendar') {
             (window as any).electron.resizeWindow(1150, 600)
+        } else if (appMode === 'launcher') {
+            (window as any).electron.resizeWindow(950, 600)
         }
     }
   }, [appMode])
@@ -79,17 +88,43 @@ export default function Home() {
     }
   }, [messages])
   
-  // Detect if calendar is mentioned or used
+  // Detect context to switch views
   useEffect(() => {
-    // If any message has toolData of type 'event' or 'slots', show calendar
-    // Or if user specifically asks for it (maybe heuristic)
-    const hasCalendarContext = messages.some(m => m.toolData)
+    // Check the most recent tool usage to decide view
+    const lastToolMsg = [...messages].reverse().find(m => m.toolData)
     
-    if (hasCalendarContext && appMode !== 'calendar') {
-        setAppMode('calendar')
-        setShowCalendar(true)
+    if (lastToolMsg?.toolData) {
+        if (lastToolMsg.toolData.type === 'manage_app') {
+             if (lastToolMsg.toolData.action === 'launch' && appMode !== 'launcher') {
+                  setAppMode('launcher')
+             }
+        } else if (lastToolMsg.toolData.type === 'launch_app' || lastToolMsg.toolData.type === 'list_apps') {
+             if (appMode !== 'launcher') setAppMode('launcher')
+        } else {
+             // events or slots
+             if (appMode !== 'calendar') {
+                 setAppMode('calendar')
+                 setShowCalendar(true)
+             }
+        }
     }
   }, [messages])
+
+  // Poll for running apps always if Electron
+  useEffect(() => {
+     let interval: NodeJS.Timeout;
+     if ((window as any).electron) {
+        const fetchApps = async () => {
+            const apps = await (window as any).electron.getRunningApps();
+            if (Array.isArray(apps)) {
+                setLaunchedApps(apps);
+            }
+        };
+        fetchApps();
+        interval = setInterval(fetchApps, 5000); // Poll every 5s
+     }
+     return () => clearInterval(interval);
+  }, [])
 
   const [isFetchingMore, setIsFetchingMore] = useState(false)
 
@@ -441,6 +476,7 @@ export default function Home() {
         body: JSON.stringify({
           messages: [...messages, userMessage],
           calendarEvents: relevantCalendarEvents,
+          runningApps: launchedApps, // Pass the known running apps
         }),
       })
 
@@ -493,6 +529,23 @@ export default function Home() {
             // Check for tool result data
             if (parsed.tool_result_data) {
                 console.log('Received tool data:', parsed.tool_result_data)
+
+                if (parsed.tool_result_data.type === 'manage_app' && (window as any).electron) {
+                    (window as any).electron.manageApp(parsed.tool_result_data.appName, parsed.tool_result_data.action);
+                    if (parsed.tool_result_data.action === 'launch') {
+                         setLaunchedApps(prev => [...prev, parsed.tool_result_data.appName])
+                    }
+                } else if (parsed.tool_result_data.type === 'launch_app' && (window as any).electron) {
+                     // Backward compatibility just in case
+                    (window as any).electron.launchApp(parsed.tool_result_data.appName);
+                    setLaunchedApps(prev => [...prev, parsed.tool_result_data.appName])
+                } else if (parsed.tool_result_data.type === 'list_apps') {
+                    // Update the list immediately from server data just in case
+                    if (Array.isArray(parsed.tool_result_data.apps)) {
+                        setLaunchedApps(parsed.tool_result_data.apps)
+                    }
+                }
+
                 setMessages(prev => {
                     const updated = [...prev]
                     const lastIndex = updated.length - 1
@@ -593,13 +646,13 @@ export default function Home() {
   return (
     <main className="h-screen w-screen overflow-hidden bg-transparent">
       {appMode !== 'bar' && <div className="stars"></div>}
-      <div className={`mx-auto flex h-full w-full flex-col ${appMode === 'calendar' ? 'gap-6 px-4 py-6' : 'gap-0 p-0'} lg:flex-row relative z-10 transition-all duration-300`}>
+      <div className={`mx-auto flex h-full w-full ${(appMode === 'calendar' || appMode === 'launcher') ? 'flex-row gap-6 px-4 py-6' : 'flex-col gap-0 p-0'} relative z-10 transition-all duration-300`}>
         {/* Chat panel */}
         <motion.section 
           initial={{ opacity: 0, x: -50 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.6, ease: "easeOut" }}
-          className={`flex min-h-0 flex-1 flex-col ${appMode === 'bar' ? 'rounded-lg' : 'rounded-2xl'} glass-panel shadow-lg ${appMode === 'calendar' ? 'lg:w-1/3' : 'w-full'} overflow-hidden transition-all duration-300`}
+          className={`flex min-h-0 flex-1 flex-col ${appMode === 'bar' ? 'rounded-lg' : 'rounded-2xl'} glass-panel shadow-lg ${appMode === 'calendar' ? 'w-1/3' : appMode === 'launcher' ? 'w-[70%]' : 'w-full'} overflow-hidden transition-all duration-300`}
         >
           {/* Header */}
           {appMode !== 'bar' && (
@@ -746,6 +799,13 @@ export default function Home() {
                         />
                       )}
                       
+                      {message.toolData && (message.toolData.type === 'manage_app' || message.toolData.type === 'launch_app') && (
+                        <AppControlCard 
+                            appName={message.toolData.appName!}
+                            action={message.toolData.action || 'launch'}
+                        />
+                      )}
+
                       {message.toolData && message.toolData.type === 'slots' && message.toolData.slots && (
                         <SlotPicker 
                             slots={message.toolData.slots}
@@ -837,13 +897,17 @@ export default function Home() {
         </motion.section>
 
         {/* Calendar panel */}
-        {appMode === 'calendar' && (
+        {(appMode === 'calendar' || appMode === 'launcher') && (
         <motion.aside 
           initial={{ opacity: 0, x: 50 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.6, ease: "easeOut", delay: 0.2 }}
-          className="flex min-h-0 flex-col rounded-2xl glass-panel shadow-lg lg:flex-1 overflow-hidden"
+          className={`flex min-h-0 flex-col rounded-2xl glass-panel shadow-lg ${appMode === 'calendar' ? 'flex-1' : 'w-[25%]'} overflow-hidden`}
         >
+          {appMode === 'launcher' ? (
+              <RecentAppsView apps={launchedApps} />
+          ) : (
+          <>
           <div className="p-4 border-b border-white/10 bg-white/5">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
@@ -958,6 +1022,8 @@ export default function Home() {
               />
             )}
           </div>
+          </>
+          )}
         </motion.aside>
         )}
       </div>
